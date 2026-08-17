@@ -85,6 +85,45 @@ care which one it came from:
 
 ---
 
+## The model, and what it is allowed to do
+
+| | |
+|---|---|
+| Interface | `LLMProvider` — a `Protocol` with a single method, introduced in the first commit so the provider could never spread through the code |
+| Written | **Cerebras `gpt-oss-120b`** for live runs and simulations · a fake provider for unit tests |
+| Production choice | **Claude Haiku 4.5** — decided and documented, **not yet written**: the interface is there, the second implementation is not |
+| Answer shape | a strict JSON schema, never free text |
+| System prompt | assembled per request from the price list, the masters' schedule, the free slots computed live and the chat history read out of Telegram. **11 958 characters** as measured today — no vector store, no RAG, no retrieval step |
+| Latency | ≈2 s per answer in live runs |
+| Cost driver | the prompt travels with **every** request, so it is ~90% of the token spend |
+| Reproducibility | `LLM_SEED` pins the seed, so a simulation run can be repeated |
+
+The model does not return prose that the system then trusts. It returns exactly this, and the
+provider enforces the shape with `strict: true`:
+
+```json
+{"reply": "…", "needs_human": false, "reason": "", "booking": null}
+```
+
+`booking` is either `null` or a complete slot — master, date, time, service. A partial booking
+cannot be expressed, so it cannot be half-written to disk. And `Booker` still re-checks the
+slot before writing: the model proposing a booking is a request, not a decision.
+
+**Escalation is deliberately two-layered.** Our own trigger list catches the explicit — 56
+medical roots, 18 spam roots — and the model's own `needs_human` flag catches what no list can
+describe: haggling, a complaint, a request nobody anticipated. Neither layer alone is enough.
+
+Two findings that cost real time:
+
+- **hidden reasoning.** `gpt-oss` glues its chain of thought straight into the answer text,
+  untagged, unless `reasoning_format="hidden"` is set. Without that one parameter the client
+  reads the model thinking about them.
+- **the cheapest guard runs before the model.** Health and spam triggers fire *before* the
+  request is sent, so a medical question never reaches the provider at all. It cannot be
+  answered wrongly, and it costs nothing — a guard that saves money instead of spending it.
+
+---
+
 ## The idea the rest of the project hangs on
 
 **A guard blocks. A report only talks.** A protection you can ignore is not a protection —
