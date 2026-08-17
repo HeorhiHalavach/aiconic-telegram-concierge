@@ -1,0 +1,379 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Окно администратора · AICONIC</title>
+<!--
+  Одна страница, ноль сборки, ноль npm. Причина в чертеже этапа 2: под три
+  экранные формы React — лишний тулчейн, а он такой же костыль, как хак в коде.
+  Вся логика живёт в Python за /api, поэтому если когда-нибудь понадобится
+  настоящий фронтенд, переписывать придётся страницу, а не систему.
+
+  Три экрана: мессенджеры → лента выбранного → разговор.
+
+  ⚠️ ГЛАВНОЕ ПРАВИЛО ЭТОГО ФАЙЛА. Опрос НЕ перерисовывает то, с чем работает
+  человек. Живой прогон 2026-08-16: экран разговора перерисовывался целиком раз
+  в 5 секунд, и набранный ответ стирался у Георгия прямо во время печати.
+  Теперь поле ввода создаётся ОДИН раз и не пересоздаётся никогда, а обновляются
+  только список сообщений и карточка.
+-->
+<style>
+  :root {
+    --фон: #f4f7f6; --лист: #fff; --линия: #dbe4e2;
+    --текст: #16232b; --тише: #6b7a80;
+    --ждут: #b3261e; --ждут-фон: #fdeceb;
+    --своё: #e8f2ef;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --фон: #101719; --лист: #182124; --линия: #2a373a;
+      --текст: #e6edeb; --тише: #8b9a9c;
+      --ждут: #ff8a80; --ждут-фон: #2b1513; --своё: #17282a;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--фон); color: var(--текст);
+    font: 16px/1.5 -apple-system, "Segoe UI", system-ui, sans-serif;
+  }
+  header {
+    position: sticky; top: 0; z-index: 2; background: var(--лист);
+    border-bottom: 1px solid var(--линия); padding: .7rem 1rem;
+    display: flex; gap: .8rem; align-items: center;
+  }
+  header b { font-size: 1rem; }
+  .ждут-счёт {
+    background: var(--ждут-фон); color: var(--ждут);
+    padding: .1rem .5rem; border-radius: 999px; font-size: .85rem;
+    white-space: nowrap;
+  }
+  main { max-width: 46rem; margin: 0 auto; padding: .6rem; }
+  .чат, .канал {
+    background: var(--лист); border: 1px solid var(--линия);
+    border-left: 4px solid transparent; border-radius: 3px;
+    padding: .7rem .9rem; margin-bottom: .5rem; cursor: pointer;
+  }
+  .чат.ждёт, .канал.ждёт { border-left-color: var(--ждут); background: var(--ждут-фон); }
+  .канал { display: flex; align-items: center; gap: .7rem; }
+  .канал .назв { font-weight: 600; font-size: 1.05rem; flex: 1; }
+  .строка { display: flex; justify-content: space-between; gap: .6rem; }
+  .имя { font-weight: 600; }
+  .когда { color: var(--тише); font-size: .8rem; white-space: nowrap; }
+  .последнее {
+    color: var(--тише); font-size: .9rem; margin-top: .2rem;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .причина { color: var(--ждут); font-size: .85rem; margin-top: .3rem; }
+  .значок {
+    background: var(--линия); color: var(--текст); font-size: .75rem;
+    padding: 0 .4rem; border-radius: 999px;
+  }
+  .сообщение {
+    background: var(--лист); border: 1px solid var(--линия);
+    border-radius: 3px; padding: .5rem .7rem; margin-bottom: .4rem;
+  }
+  .сообщение.наше { background: var(--своё); margin-left: 2rem; }
+  .карточка {
+    background: var(--лист); border: 1px solid var(--линия);
+    border-radius: 3px; padding: .7rem .9rem; margin-bottom: .8rem;
+    font-size: .9rem;
+  }
+  .карточка h2 { margin: 0 0 .4rem; font-size: 1rem; }
+  textarea {
+    width: 100%; min-height: 4.5rem; padding: .6rem; font: inherit;
+    background: var(--лист); color: var(--текст);
+    border: 1px solid var(--линия); border-radius: 3px;
+  }
+  button {
+    font: inherit; padding: .5rem 1rem; border-radius: 3px;
+    border: 1px solid var(--линия); background: var(--лист);
+    color: var(--текст); cursor: pointer;
+  }
+  button.главная { background: var(--текст); color: var(--фон); }
+  button:disabled { opacity: .5; cursor: default; }
+  .ошибка { color: var(--ждут); font-size: .9rem; margin: .4rem 0; }
+  .тише { color: var(--тише); font-size: .85rem; }
+  .пусто { color: var(--тише); padding: 1rem 0; }
+</style>
+</head>
+<body>
+<header>
+  <button id="назад" hidden>←</button>
+  <b id="заголовок">Окно администратора</b>
+  <span id="счёт" class="ждут-счёт" hidden></span>
+  <span style="flex:1"></span>
+  <span id="состояние" class="тише"></span>
+</header>
+<main id="корень"></main>
+
+<script>
+const КЛЮЧ = "inbox-token";
+let токен = localStorage.getItem(КЛЮЧ) || "";
+let таймер = null;
+
+// Где мы находимся: "каналы" | "лента" | "разговор"
+let экран_имя = "каналы";
+let канал_выбран = "";
+let чат_открыт = null;
+
+const $ = (id) => document.getElementById(id);
+const экран = () => $("корень");
+
+// --- сеть -------------------------------------------------------------------
+
+async function апи(путь, опции = {}) {
+  // ⚠️ Ошибка сети НЕ должна убивать обновление. Живой прогон 2026-08-15:
+  // после одного неудачного запроса (перезапуск main.py, сон телефона) страница
+  // переставала обновляться СОВСЕМ — исключение улетало наружу, и следующий
+  // опрос не планировался. Выглядело как «сайт не подгружает сообщения».
+  const о = Object.assign({headers: {}}, опции);
+  о.headers["X-Inbox-Token"] = токен;
+  if (о.body) о.headers["Content-Type"] = "application/json";
+  let ответ;
+  try {
+    ответ = await fetch(путь, о);
+  } catch (e) {
+    состояние("нет связи, пробую снова…");
+    return null;
+  }
+  if (ответ.status === 401) { спросить_токен("Токен не подошёл."); return null; }
+  if (!ответ.ok) { состояние("сервер ответил " + ответ.status); return null; }
+  return ответ;
+}
+
+function состояние(текст) { $("состояние").textContent = текст; }
+
+function завести(что) {
+  остановить();
+  таймер = setTimeout(что, 5000);
+}
+function остановить() { if (таймер) { clearTimeout(таймер); таймер = null; } }
+
+// --- вход -------------------------------------------------------------------
+
+function спросить_токен(сообщение = "") {
+  остановить();
+  экран().innerHTML = `
+    <div class="карточка">
+      <h2>Нужен токен</h2>
+      ${сообщение ? `<p class="ошибка">${сообщение}</p>` : ""}
+      <p class="тише">Токен лежит в <code>.env</code>, строка <code>INBOX_TOKEN</code>.
+      Он сохранится в этом браузере, вводить каждый раз не придётся.</p>
+      <p><input id="поле" type="password" style="width:100%;padding:.6rem"
+                autocomplete="off"></p>
+      <p><button class="главная" id="войти">Войти</button></p>
+    </div>`;
+  $("войти").onclick = () => {
+    токен = $("поле").value.trim();
+    localStorage.setItem(КЛЮЧ, токен);
+    показать_каналы();
+  };
+  $("поле").focus();
+}
+
+// --- экран 1: мессенджеры ---------------------------------------------------
+
+async function показать_каналы() {
+  экран_имя = "каналы"; канал_выбран = ""; чат_открыт = null;
+  $("назад").hidden = true;
+  $("заголовок").textContent = "Мессенджеры";
+
+  const о = await апи("/api/channels");
+  if (!о) { if (токен) завести(показать_каналы); return; }
+  const данные = await о.json();
+
+  шапка_счёт(данные.ждут_всего);
+  экран().innerHTML = данные.каналы.length ? данные.каналы.map((к) => `
+    <div class="канал ${к.ждут ? "ждёт" : ""}" data-канал="${экранировать(к.имя)}">
+      <span class="назв">${экранировать(к.подпись)}</span>
+      ${к.ждут
+        ? `<span class="ждут-счёт">нужна помощь: ${к.ждут}</span>`
+        : `<span class="тише">всё закрыто ботом</span>`}
+      <span class="тише">${к.чатов} ${склонение(к.чатов, "чат", "чата", "чатов")}</span>
+    </div>`).join("") : `<p class="пусто">Ни одного мессенджера не подключено.</p>`;
+
+  экран().querySelectorAll(".канал").forEach((э) => {
+    э.onclick = () => показать_ленту(э.dataset["канал"]);
+  });
+  состояние("обновлено " + время_словами(new Date().toISOString()));
+  завести(показать_каналы);
+}
+
+// --- экран 2: лента выбранного мессенджера ----------------------------------
+
+async function показать_ленту(канал) {
+  экран_имя = "лента"; канал_выбран = канал || канал_выбран; чат_открыт = null;
+  $("назад").hidden = false;
+
+  const о = await апи("/api/chats?channel=" + encodeURIComponent(канал_выбран));
+  if (!о) { if (токен) завести(() => показать_ленту()); return; }
+  const данные = await о.json();
+
+  $("заголовок").textContent = подпись_канала(канал_выбран);
+  шапка_счёт(данные.ждут);
+  экран().innerHTML = данные.чаты.length ? данные.чаты.map((ч) => `
+    <div class="чат ${ч.нужен_ответ ? "ждёт" : ""}" data-чат="${ч.чат_id}">
+      <div class="строка">
+        <span class="имя">${экранировать(ч.имя) || ч.чат_id}</span>
+        <span class="когда">${время_словами(ч.когда)}
+          ${ч.непрочитанных ? `<span class="значок">${ч.непрочитанных}</span>` : ""}
+        </span>
+      </div>
+      <div class="последнее">${экранировать(ч.последнее)}</div>
+      ${ч.нужен_ответ
+        ? `<div class="причина">● нужен ответ — ${экранировать(ч.причина)}</div>` : ""}
+    </div>`).join("") : `<p class="пусто">Разговоров пока нет.</p>`;
+
+  экран().querySelectorAll(".чат").forEach((э) => {
+    э.onclick = () => открыть_чат(Number(э.dataset["чат"]));
+  });
+  состояние("обновлено " + время_словами(new Date().toISOString()));
+  завести(() => показать_ленту());
+}
+
+// --- экран 3: разговор ------------------------------------------------------
+
+function открыть_чат(чат_id) {
+  экран_имя = "разговор"; чат_открыт = чат_id;
+  $("назад").hidden = false;
+  $("счёт").hidden = true;
+
+  // ⚠️ Каркас строится РОВНО ОДИН РАЗ. Поле ввода — часть каркаса, поэтому
+  // опрос его не трогает: набранный текст, курсор и выделение остаются на
+  // месте. Обновляются только #карточка и #сообщения.
+  экран().innerHTML = `
+    <div id="карточка"></div>
+    <div id="сообщения"></div>
+    <div class="карточка">
+      <textarea id="ответ" placeholder="Ответить клиенту от лица салона…"></textarea>
+      <div id="итог" class="ошибка"></div>
+      <button class="главная" id="послать">Отправить</button>
+    </div>`;
+
+  $("послать").onclick = послать;
+  обновить_чат();
+}
+
+async function послать() {
+  const поле = $("ответ");
+  const текст = поле.value.trim();
+  if (!текст) return;
+  $("послать").disabled = true;
+  const о = await апи("/api/reply", {
+    method: "POST",
+    body: JSON.stringify({чат_id: чат_открыт, текст: текст}),
+  });
+  $("послать").disabled = false;
+  if (!о) { $("итог").textContent = "не отправлено: нет связи"; return; }
+  const р = await о.json();
+  if (р.отправлено) {
+    поле.value = "";                      // очищаем ТОЛЬКО после успеха
+    $("итог").textContent = "";
+    обновить_чат();
+  } else {
+    $("итог").textContent = "не отправлено: " + р.причина;
+  }
+}
+
+async function обновить_чат() {
+  const о = await апи(`/api/chat/${чат_открыт}`);
+  if (!о) { if (токен) завести(обновить_чат); return; }
+  const {сообщения, карточка} = await о.json();
+  if (экран_имя !== "разговор") return;   // успели уйти на другой экран
+
+  $("заголовок").textContent = карточка.имя || ("чат " + карточка.чат_id);
+
+  const визиты = карточка.визиты.map((в) =>
+    `<li>${в.дата} ${в.время} — ${экранировать(в.услуга)}` +
+    `${в.мастер ? ", " + экранировать(в.мастер) : ""}${в.прошёл ? " (был)" : ""}</li>`
+  ).join("");
+
+  $("карточка").innerHTML = `
+    <div class="карточка">
+      <div class="тише">${экранировать(карточка.канал)} · id ${карточка.чат_id} ·
+        визитов: ${карточка.визитов_всего}</div>
+      ${карточка.нужен_ответ
+        ? `<p class="причина">● нужен ответ — ${экранировать(карточка.причина)}
+             <span class="тише">с ${время_словами(карточка.передана)}</span></p>` : ""}
+      ${визиты ? `<ul>${визиты}</ul>` : `<p class="тише">Записей нет.</p>`}
+    </div>`;
+
+  // Перерисовываем список сообщений только если он изменился: иначе экран
+  // дёргается каждые пять секунд под пальцем.
+  const свежий = сообщения.map((м) => `
+    <div class="сообщение ${м.наше ? "наше" : ""}">
+      ${экранировать(м.текст)}
+      <div class="когда">${время_словами(м.когда)}</div>
+    </div>`).join("");
+  if ($("сообщения").dataset["отпечаток"] !== свежий) {
+    $("сообщения").dataset["отпечаток"] = свежий;
+    $("сообщения").innerHTML = свежий;
+  }
+  состояние("обновлено " + время_словами(new Date().toISOString()));
+  завести(обновить_чат);
+}
+
+// --- мелочи -----------------------------------------------------------------
+
+let подписи_каналов = {};
+function подпись_канала(имя) { return подписи_каналов[имя] || имя; }
+
+function шапка_счёт(сколько) {
+  $("счёт").hidden = !сколько;
+  $("счёт").textContent = сколько ? `ждут ответа: ${сколько}` : "";
+}
+
+function склонение(n, один, два, много) {
+  const о = n % 10, д = n % 100;
+  if (о === 1 && д !== 11) return один;
+  if (о >= 2 && о <= 4 && (д < 12 || д > 14)) return два;
+  return много;
+}
+
+function время_словами(iso) {
+  if (!iso) return "";
+  const д = new Date(iso), сейчас = new Date();
+  const тот_же = д.toDateString() === сейчас.toDateString();
+  const t = д.toLocaleTimeString("ru-RU", {hour: "2-digit", minute: "2-digit"});
+  return тот_же ? t
+    : д.toLocaleDateString("ru-RU", {day: "2-digit", month: "2-digit"}) + " " + t;
+}
+
+// Экранирование обязательно: сюда приходит текст КЛИЕНТА, а он может прислать
+// что угодно, включая разметку. Единственное место страницы с чужим вводом.
+function экранировать(s) {
+  return String(s ?? "").replace(/[&<>"']/g, (c) => (
+    {"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]
+  ));
+}
+
+// --- навигация --------------------------------------------------------------
+
+$("назад").onclick = () => {
+  if (экран_имя === "разговор") показать_ленту();
+  else показать_каналы();
+};
+
+// Телефон засыпает и таймеры замирают — при возврате обновляем сразу, иначе
+// администратор увидит вчерашнюю ленту и решит, что окно сломалось.
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState !== "visible") { остановить(); return; }
+  if (экран_имя === "разговор") обновить_чат();
+  else if (экран_имя === "лента") показать_ленту();
+  else показать_каналы();
+});
+
+(async () => {
+  if (!токен) { спросить_токен(); return; }
+  // Подписи каналов нужны заголовку ленты — берём их один раз при входе.
+  const о = await апи("/api/channels");
+  if (о) {
+    const д = await о.json();
+    д.каналы.forEach((к) => { подписи_каналов[к.имя] = к.подпись; });
+  }
+  показать_каналы();
+})();
+</script>
+</body>
+</html>
