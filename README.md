@@ -30,6 +30,11 @@ operator manual is [README.ru.md](README.ru.md); the full engineering documentat
 
 ## What the human on duty sees
 
+![The three screens: messengers, the feed, one conversation, a confirmed booking](docs/screens/walkthrough.gif)
+
+<sup>Four real frames from the window running on the fictional salon data — no Telegram
+account and no API key needed to reproduce them: `python tools/демо_окна.py`.</sup>
+
 **One screen for all messengers, before choosing anything: where am I needed?**
 
 ![Messengers with a "needs help" count per channel](docs/screens/messengers.png)
