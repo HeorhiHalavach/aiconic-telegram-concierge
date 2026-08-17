@@ -217,7 +217,7 @@ Telethon, которую библиотека подставляет как ве
 Окружение: Python 3.14.3, `telethon 1.44.0`, `cerebras_cloud_sdk 1.91.0`,
 `PyYAML 6.0.3`. `pip check` → «No broken requirements found».
 
-Репозиторий: HeorhiHalavach/aiconic (приватный рабочий репозиторий),
+Репозиторий: HeorhiHalavach/aiconic,
 приватный, ветка `master`. Исходный PDF КП в git не кладётся — в нём контакты третьего
 лица; файл остаётся в рабочей папке.
 
