@@ -64,11 +64,17 @@ the whitelist still applies, while `STOP`, the rate limit and the "did the model
 this?" checks do not, because a human wrote the text.
 
 <details>
-<summary>Two more frames: a health question handed over, and a booking confirmed</summary>
+<summary>Three more frames: a health question handed over, a booking confirmed, and a second channel</summary>
 
 ![A health question handed to a human](docs/screens/handover-medical.png)
 
 ![A confirmed booking with the reminder promise](docs/screens/booked.png)
+
+The same window, same page, same card — a different messenger. Nothing here knows it is
+Instagram; it is one more implementation of the `Канал` protocol, and the feed does not
+care which one it came from:
+
+![The Instagram feed with a bargaining request waiting for a human](docs/screens/feed-instagram.png)
 
 </details>
 
